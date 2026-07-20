@@ -4,9 +4,11 @@ import pymupdf
 from langchain_text_splitters import CharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-# from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
-# import os
-# from pathlib import Path
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+from langchain_google_genai import ChatGoogleGenerativeAI
+load_dotenv()
 
 
 def get_pdf_text(pdf_docs):
@@ -47,11 +49,76 @@ def get_vectorstore(text_chunks):
     return vectorstore
 
 
+def get_llm():
+    return ChatGoogleGenerativeAI(
+        model='gemini-3.5-flash',
+        temperature=0.3,
+        max_output_tokens=512,
+    )
+
+
+# def format_docs(docs):
+#     return "\n\n".join(doc.page_content for doc in docs)
+
+
+# def get_conversation_chain(vectorstore):
+#     retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+#     llm = get_llm()
+
+#     prompt = ChatPromptTemplate.from_template(
+#         """You are a helpful assistant answering questions using ONLY the context below.
+# If the answer isn't in the context, say you don't know — don't make things up.
+
+# Context:
+# {context}
+
+# Question: {question}
+
+# Answer:"""
+#     )
+
+#     chain = (
+#         {"context": retriever | format_docs, "question": RunnablePassthrough()}
+#         | prompt
+#         | llm
+#         | StrOutputParser()
+#     )
+
+#     return chain
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+
+def get_conversation_chain(vectorstore):
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+    llm = get_llm()
+
+    prompt = ChatPromptTemplate.from_template(
+        """You are a helpful assistant answering questions using ONLY the context below.
+If the answer isn't in the context, say you don't know — don't make things up.
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:"""
+    )
+
+    chain = (
+        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+
+    return chain
+
+
 def main():
     st.set_page_config(page_title='Chat with your Documents',
-                       page_icon='📚', layout='centered')
+                       layout='centered')
 
-    # Minimal custom styling
     st.markdown("""
         <style>
         .block-container { padding-top: 2rem; max-width: 800px; }
@@ -67,16 +134,14 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
-    st.markdown("<h2 style='text-align:center; font-weight:600;'>📚 Chat with your Documents</h2>",
+    st.markdown("<h2 style='text-align:center; font-weight:600;'>Chat with your Documents</h2>",
                 unsafe_allow_html=True)
 
-    # Track whether docs have been processed
     if 'docs_ready' not in st.session_state:
         st.session_state.docs_ready = False
     if 'chat_history' not in st.session_state:
         st.session_state.chat_history = []
 
-    # Upload box only shows before processing
     if not st.session_state.docs_ready:
         with st.container():
             st.markdown("<div class='upload-box'>", unsafe_allow_html=True)
@@ -94,15 +159,19 @@ def main():
             if go and pdf:
                 with st.spinner('Reading and indexing your documents...'):
                     raw_text = get_pdf_text(pdf)
+                    # st.write(raw_text)
                     text_chunks = get_text_chunks(raw_text)
+                    # st.write(text_chunka)
                     vectorstore = get_vectorstore(text_chunks)
+                    # st.write(vectorstore)
                     st.session_state.vectorstore = vectorstore
+                    st.session_state.conversation_chain = get_conversation_chain(
+                        vectorstore)
                 st.session_state.docs_ready = True
                 st.rerun()
             elif go and not pdf:
                 st.warning('Please upload at least one PDF first.')
     else:
-        # Small status line + option to add more docs
         top_col1, top_col2 = st.columns([5, 1])
         with top_col1:
             st.caption('✅ Documents indexed — ask away below.')
@@ -112,12 +181,10 @@ def main():
                 st.session_state.chat_history = []
                 st.rerun()
 
-    # Chat history
     for msg in st.session_state.chat_history:
         with st.chat_message(msg['role']):
             st.write(msg['content'])
 
-    # Chat input (disabled until docs are processed)
     question = st.chat_input(
         'Ask questions about your documents' if st.session_state.docs_ready else 'Upload a document first',
         disabled=not st.session_state.docs_ready
@@ -129,10 +196,14 @@ def main():
         with st.chat_message('user'):
             st.write(question)
 
+        # with st.chat_message('assistant'):
+        #     with st.spinner('Thinking...'):
+        #         # answer = get_answer(question, st.session_state.vectorstore)
+        #         answer = "..."  # plug in your QA chain response here
+        #         st.write(answer)
         with st.chat_message('assistant'):
             with st.spinner('Thinking...'):
-                # answer = get_answer(question, st.session_state.vectorstore)
-                answer = "..."  # plug in your QA chain response here
+                answer = st.session_state.conversation_chain.invoke(question)
                 st.write(answer)
 
         st.session_state.chat_history.append(
